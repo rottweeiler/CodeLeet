@@ -1,0 +1,108 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+
+concurrency:
+  group: ci-${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+
+jobs:
+
+  docker:
+    name: CI-Docker Build
+    runs-on: ubuntu-latest
+  
+    env:
+      JWT_SECRET: ci-placeholder
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Validate compose file
+        run: docker compose --profile sandbox config -q
+      - name: Build all images
+        run: docker compose --profile sandbox build
+      - name: Check nginx config
+        run: docker run --rm --add-host api:127.0.0.1 codeleet-gateway nginx -t
+
+  backend:
+    name: CI-Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Cache MongoDB binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('backend/package-lock.json') }}
+      
+      - name: Setup CI dependeicncies
+        run: npm ci
+       
+      - name: Run tests
+        run: npm test
+  
+
+  frontend:
+    name: CI-Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./client
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Setup CI dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+      
+      - name: Build frontend
+        run: npm run build
+  
+  publish:
+    needs: [backend, frontend, docker]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish.yml
+
+  # Waits for approval in the "production" environment (see deploy.yml)
+  deploy:
+    needs: [publish]
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+
+
+
+        
+
+
+
+
